@@ -1,0 +1,7 @@
+{
+  "name": "Gemini Spelling Adventure",
+  "description": "A magical hand-tracked spelling game where Gemini Flash acts as your playful spelling coach.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
