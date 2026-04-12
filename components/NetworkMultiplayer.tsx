@@ -84,6 +84,7 @@ export const NetworkMultiplayer: React.FC = () => {
   // Game State (React state for UI)
   const [loading, setLoading] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<"idle" | "creating" | "waiting" | "joining" | "connected" | "error">("idle");
+  const [waitingForWord, setWaitingForWord] = useState(false);
   const [roomCode, setRoomCode] = useState("");
   const [joinCode, setJoinCode] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
@@ -327,6 +328,8 @@ export const NetworkMultiplayer: React.FC = () => {
   const setupConnListeners = useCallback((conn: DataConnection) => {
     conn.on("data", (data: any) => {
       if (data.type === "START_WORD") {
+        // Clear waiting overlay as soon as first word arrives
+        setWaitingForWord(false);
         currentWordRef.current = data.word;
         setCurrentWord(data.word);
         setTrayWord("");
@@ -427,6 +430,8 @@ export const NetworkMultiplayer: React.FC = () => {
       conn.on("open", () => {
         setConnectionStatus("connected");
         setGamePhase("PLAYING");
+        // Show waiting overlay until host sends the first START_WORD
+        setWaitingForWord(true);
         setupConnListeners(conn);
       });
       conn.on("error", () => {
@@ -1046,6 +1051,31 @@ export const NetworkMultiplayer: React.FC = () => {
               </div>
               <p className="mt-8 text-xl font-bold text-gray-600 tracking-tight">Starting Camera...</p>
               <p className="mt-2 text-sm text-gray-400">Allow camera access when prompted</p>
+            </div>
+          </div>
+        )}
+
+        {/* Waiting-for-host overlay (joiner only) */}
+        {waitingForWord && (
+          <div className="absolute inset-0 flex items-center justify-center z-50"
+            style={{ background: "linear-gradient(135deg, rgba(15,12,41,0.96), rgba(48,43,99,0.96), rgba(36,36,62,0.96))" }}>
+            <div className="flex flex-col items-center gap-6">
+              <div className="relative">
+                <div className="w-20 h-20 border-4 border-purple-500/30 border-t-purple-400 rounded-full animate-spin" />
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <Wifi className="w-8 h-8 text-purple-400 animate-pulse" />
+                </div>
+              </div>
+              <div className="text-center">
+                <p className="text-2xl font-black text-white mb-2">Connected!</p>
+                <p className="text-white/60 font-semibold">Waiting for host to start the game...</p>
+              </div>
+              <div className="flex gap-2">
+                {[0,1,2].map(i => (
+                  <div key={i} className="w-2 h-2 bg-purple-400 rounded-full animate-bounce"
+                    style={{ animationDelay: `${i * 0.15}s` }} />
+                ))}
+              </div>
             </div>
           </div>
         )}
