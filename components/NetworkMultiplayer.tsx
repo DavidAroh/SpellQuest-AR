@@ -109,6 +109,7 @@ export const NetworkMultiplayer: React.FC = () => {
   const peerRef = useRef<Peer | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const soundEnabledRef = useRef(true);
+  const cameraInitializedRef = useRef(false);
 
   // Keep refs in sync with state
   useEffect(() => { currentWordRef.current = currentWord; }, [currentWord]);
@@ -454,18 +455,17 @@ export const NetworkMultiplayer: React.FC = () => {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  // Cleanup on unmount
+  // Cleanup on unmount (timer + peer only; camera effect handles its own cleanup)
   useEffect(() => {
     return () => {
       if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
-      cameraRef.current?.stop();
-      handsRef.current?.close();
       peerRef.current?.destroy();
     };
   }, []);
 
-  // Canvas resize
+  // Canvas resize — must depend on gamePhase so it runs AFTER the canvas is in the DOM
   useEffect(() => {
+    if (gamePhase !== "PLAYING") return;
     if (!canvasRef.current || !containerRef.current) return;
     const canvas = canvasRef.current;
     const container = containerRef.current;
@@ -479,11 +479,19 @@ export const NetworkMultiplayer: React.FC = () => {
     window.addEventListener("resize", resize);
     resize();
     return () => window.removeEventListener("resize", resize);
-  }, [initPool]);
+  }, [gamePhase, initPool]);
 
-  // Initialize camera + hands once on mount
+  // Initialize camera + hands once when the game PLAYING UI is rendered.
+  // The <video> and <canvas> elements only appear in the DOM when gamePhase === "PLAYING",
+  // so this effect MUST depend on gamePhase — the mount-time run always found null refs.
   useEffect(() => {
+    if (gamePhase !== "PLAYING") return;
+    if (cameraInitializedRef.current) return; // prevent double-init on re-renders
     if (!videoRef.current || !canvasRef.current || !containerRef.current) return;
+
+    cameraInitializedRef.current = true;
+    setLoading(true); // show "Starting Camera..." overlay until first frame arrives
+
     const video = videoRef.current;
     const canvas = canvasRef.current;
 
@@ -741,8 +749,11 @@ export const NetworkMultiplayer: React.FC = () => {
     return () => {
       cameraRef.current?.stop();
       handsRef.current?.close();
+      cameraRef.current = null;
+      handsRef.current = null;
+      cameraInitializedRef.current = false;
     };
-  }, []); // Mount once — use refs for all state inside
+  }, [gamePhase]); // Re-run when gamePhase changes so PLAYING UI refs are populated
 
   const getTimerColor = () => {
     if (timeLeft > 20) return "text-green-600 border-green-300";
