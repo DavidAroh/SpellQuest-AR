@@ -17,14 +17,15 @@ import {
 } from "lucide-react";
 import { WORD_CATEGORIES } from "./wordLists";
 
-const PINCH_GRAB_THRESHOLD = 0.09;    // normalized; fingers within ~9% of frame width
-const PINCH_RELEASE_THRESHOLD = 0.13; // wider so you don't accidentally drop mid-drag
+const PINCH_GRAB_THRESHOLD = 0.08;    // normalized; fingers within ~8% of frame width
+const PINCH_RELEASE_THRESHOLD = 0.14; // wider so you don't accidentally drop mid-drag
 const TRAY_Y = 220;
-const HAND_SMOOTH = 0.4;              // cursor smoothing (0=frozen, 1=raw)
-const GRAB_CONFIRM_FRAMES = 3;        // frames of pinch needed to lock a tile (was 6)
-const HAND_SETTLE_FRAMES = 3;         // frames before grabs are enabled after hand appears
-const TILE_SIZE = 60;
-const POOL_SPACING = 1.3;
+const HAND_SMOOTH = 0.35;             // cursor smoothing (0=frozen, 1=raw)
+const GRAB_CONFIRM_FRAMES = 2;        // frames of pinch needed to lock a tile
+const HAND_SETTLE_FRAMES = 2;         // frames before grabs are enabled after hand appears
+const TILE_SIZE = 72;                 // bigger tiles
+const POOL_SPACING = 1.45;            // more spacing between tiles
+const MAX_ADD_TIME = 3;               // max times player can add +5s per word
 
 const TILE_COLORS: TileColor[] = [
   "red",
@@ -67,6 +68,8 @@ const SpellingAdventure: React.FC = () => {
   const activeTileId = useRef<string | null>(null);
   // Gesture smoothing & confirmation
   const smoothHandPos = useRef<Point>({ x: -9999, y: -9999 }); // off-screen until first detection
+  const prevHandPos = useRef<Point>({ x: -9999, y: -9999 });   // for velocity trail
+  const handVelocity = useRef<Point>({ x: 0, y: 0 });           // smoothed velocity
   const pinchFrames = useRef<number>(0);
   const pinchConfirmed = useRef<boolean>(false);
   const handSettleFrames = useRef<number>(0); // counts frames since hand appeared
@@ -92,6 +95,7 @@ const SpellingAdventure: React.FC = () => {
   const [highScore, setHighScore] = useState(0);
   const [wordsCompleted, setWordsCompleted] = useState(0);
   const [timeLeft, setTimeLeft] = useState(30);
+  const [addTimeCount, setAddTimeCount] = useState(0); // how many +5s used this word
 
   // Settings State
   const [showSettings, setShowSettings] = useState(false);
@@ -323,6 +327,7 @@ const SpellingAdventure: React.FC = () => {
     setTimeLeft(limit);
     timeLeftRef.current = limit;
     isCorrectRef.current = false;
+    setAddTimeCount(0); // reset add-time uses for new word
 
     timerIntervalRef.current = setInterval(() => {
       setTimeLeft((prev) => {
@@ -347,6 +352,20 @@ const SpellingAdventure: React.FC = () => {
     }, 1000);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // uses refs — never needs to remount
+
+  const addTime = useCallback(() => {
+    setAddTimeCount((prev) => {
+      if (prev >= MAX_ADD_TIME) return prev;
+      const bonus = 5;
+      setTimeLeft((t) => {
+        const updated = t + bonus;
+        timeLeftRef.current = updated;
+        return updated;
+      });
+      playSoundRef.current("click");
+      return prev + 1;
+    });
+  }, []);
 
   const nextWord = useCallback(() => {
     const wordList = WORD_CATEGORIES[category][difficulty];
@@ -482,13 +501,21 @@ const SpellingAdventure: React.FC = () => {
         if (!handWasPresent.current) {
           smoothHandPos.current.x = rawX;
           smoothHandPos.current.y = rawY;
+          prevHandPos.current.x = rawX;
+          prevHandPos.current.y = rawY;
+          handVelocity.current = { x: 0, y: 0 };
           handWasPresent.current = true;
           handSettleFrames.current = 0;
           pinchFrames.current = 0;
           pinchConfirmed.current = false;
         } else {
+          prevHandPos.current.x = smoothHandPos.current.x;
+          prevHandPos.current.y = smoothHandPos.current.y;
           smoothHandPos.current.x += (rawX - smoothHandPos.current.x) * HAND_SMOOTH;
           smoothHandPos.current.y += (rawY - smoothHandPos.current.y) * HAND_SMOOTH;
+          // Track velocity for trail effect
+          handVelocity.current.x = smoothHandPos.current.x - prevHandPos.current.x;
+          handVelocity.current.y = smoothHandPos.current.y - prevHandPos.current.y;
         }
         handSettleFrames.current = Math.min(handSettleFrames.current + 1, HAND_SETTLE_FRAMES + 1);
         handPos = { x: smoothHandPos.current.x, y: smoothHandPos.current.y };
@@ -672,40 +699,100 @@ const SpellingAdventure: React.FC = () => {
 
       // --- Hand cursor ---
       if (handPos) {
-        // Pinch strength: 0 = fingers wide open, 1 = fully pinched
+        // Pinch strength: 0 = open, 1 = fully pinched
         const pinchStrength = Math.max(
           0,
           Math.min(1, 1 - (pinchDistance - 0) / (PINCH_GRAB_THRESHOLD * 2)),
         );
 
-        // Outer ring — shrinks as you pinch closer
-        const outerR = 30 - pinchStrength * 12;
+        const vel = handVelocity.current;
+        const speed = Math.sqrt(vel.x * vel.x + vel.y * vel.y);
+
+        // Motion trail — draw behind cursor when moving fast
+        if (speed > 1.5 && !isPinching) {
+          const trailCount = 4;
+          for (let tr = trailCount; tr >= 1; tr--) {
+            const frac = tr / trailCount;
+            const tx = handPos.x - vel.x * tr * 1.2;
+            const ty = handPos.y - vel.y * tr * 1.2;
+            ctx.beginPath();
+            ctx.arc(tx, ty, 6 * frac, 0, Math.PI * 2);
+            ctx.fillStyle = `rgba(66,133,244,${0.08 * frac})`;
+            ctx.fill();
+          }
+        }
+
+        // Pinch progress arc (background track)
+        const arcR = 28;
         ctx.beginPath();
-        ctx.arc(handPos.x, handPos.y, outerR, 0, Math.PI * 2);
-        ctx.strokeStyle = isPinching
-          ? "#ff4081"
-          : `rgba(66,133,244,${0.4 + pinchStrength * 0.5})`;
-        ctx.lineWidth = isPinching ? 4 : 2.5;
+        ctx.arc(handPos.x, handPos.y, arcR, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2, false);
+        ctx.strokeStyle = "rgba(200,200,200,0.25)";
+        ctx.lineWidth = 4;
         ctx.stroke();
 
+        // Pinch progress arc (fill)
+        ctx.beginPath();
+        ctx.arc(
+          handPos.x,
+          handPos.y,
+          arcR,
+          -Math.PI / 2,
+          -Math.PI / 2 + Math.PI * 2 * pinchStrength,
+          false,
+        );
+        ctx.strokeStyle = isPinching
+          ? "#ff4081"
+          : `rgba(66,133,244,${0.6 + pinchStrength * 0.4})`;
+        ctx.lineWidth = isPinching ? 5 : 3.5;
+        ctx.lineCap = "round";
+        ctx.stroke();
+        ctx.lineCap = "butt";
+
+        // Outer animated ring when actively dragging
+        if (isPinching && activeTileId.current) {
+          const pulse = 0.5 + 0.5 * Math.sin(Date.now() * 0.01);
+          ctx.beginPath();
+          ctx.arc(handPos.x, handPos.y, arcR + 8 + pulse * 4, 0, Math.PI * 2);
+          ctx.strokeStyle = `rgba(255,64,129,${0.2 + pulse * 0.15})`;
+          ctx.lineWidth = 2;
+          ctx.stroke();
+        }
+
         // Inner filled dot — grows as you pinch
-        const innerR = 4 + pinchStrength * 8;
+        const innerR = 5 + pinchStrength * 9;
+        const grad = ctx.createRadialGradient(
+          handPos.x, handPos.y, 0,
+          handPos.x, handPos.y, innerR,
+        );
+        if (isPinching) {
+          grad.addColorStop(0, "rgba(255,64,129,0.9)");
+          grad.addColorStop(1, "rgba(255,64,129,0.1)");
+        } else {
+          grad.addColorStop(0, `rgba(66,133,244,${0.3 + pinchStrength * 0.5})`);
+          grad.addColorStop(1, `rgba(66,133,244,0.05)`);
+        }
         ctx.beginPath();
         ctx.arc(handPos.x, handPos.y, innerR, 0, Math.PI * 2);
-        ctx.fillStyle = isPinching
-          ? "rgba(255,64,129,0.55)"
-          : `rgba(66,133,244,${0.2 + pinchStrength * 0.4})`;
+        ctx.fillStyle = grad;
         ctx.fill();
 
-        // Label
-        ctx.font = "bold 11px sans-serif";
+        // Label pill
+        const label = isPinching
+          ? activeTileId.current ? "✦ DRAGGING" : "✦ GRAB"
+          : pinchStrength > 0.4 ? "CLOSE..." : "PINCH";
+        const labelY = handPos.y + arcR + 20;
+        ctx.font = "bold 11px 'Roboto', sans-serif";
         ctx.textAlign = "center";
-        ctx.fillStyle = isPinching ? "#ff4081" : "#4285f4";
-        ctx.fillText(
-          isPinching ? "✦ GRAB" : "PINCH",
-          handPos.x,
-          handPos.y + outerR + 16,
-        );
+        const labelW = ctx.measureText(label).width + 16;
+        const labelH = 20;
+        ctx.fillStyle = isPinching
+          ? "rgba(255,64,129,0.85)"
+          : "rgba(66,133,244,0.75)";
+        ctx.beginPath();
+        ctx.roundRect(handPos.x - labelW / 2, labelY - labelH / 2, labelW, labelH, 10);
+        ctx.fill();
+        ctx.fillStyle = "#fff";
+        ctx.fillText(label, handPos.x, labelY + 1);
       }
 
       for (let i = particles.current.length - 1; i >= 0; i--) {
@@ -917,16 +1004,37 @@ const SpellingAdventure: React.FC = () => {
           </div>
 
           {!isCorrect && (
-            <div
-              className={`bg-white/95 backdrop-blur-md p-4 rounded-[28px] shadow-xl border-2 flex items-center gap-3 transition-colors duration-500 ${getTimerColor()}`}
-            >
-              <Clock className="w-6 h-6" />
-              <div>
-                <p className="text-xs uppercase tracking-wider font-medium opacity-80">
-                  Time
-                </p>
-                <p className="text-2xl font-black font-mono">{timeLeft}s</p>
+            <div className="flex flex-col items-end gap-2">
+              <div
+                className={`bg-white/95 backdrop-blur-md p-4 rounded-[28px] shadow-xl border-2 flex items-center gap-3 transition-colors duration-500 ${getTimerColor()}`}
+              >
+                <Clock className="w-6 h-6" />
+                <div>
+                  <p className="text-xs uppercase tracking-wider font-medium opacity-80">
+                    Time
+                  </p>
+                  <p className="text-2xl font-black font-mono">{timeLeft}s</p>
+                </div>
               </div>
+              {/* +5s boost button */}
+              <button
+                onClick={addTime}
+                disabled={addTimeCount >= MAX_ADD_TIME}
+                title={addTimeCount >= MAX_ADD_TIME ? "Max boosts used" : "Add 5 seconds"}
+                className={`flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-black shadow-lg transition-all active:scale-95 ${
+                  addTimeCount >= MAX_ADD_TIME
+                    ? "bg-gray-200 text-gray-400 cursor-not-allowed opacity-60"
+                    : "bg-gradient-to-r from-green-400 to-emerald-500 text-white hover:shadow-xl hover:scale-105"
+                }`}
+              >
+                <span className="text-base">⏱</span>
+                +5s
+                {addTimeCount > 0 && (
+                  <span className="bg-white/25 rounded-full px-1.5 py-0.5 text-[10px] ml-0.5">
+                    {MAX_ADD_TIME - addTimeCount} left
+                  </span>
+                )}
+              </button>
             </div>
           )}
         </div>
